@@ -920,16 +920,16 @@ module Impl =
       config.parallelWorkers
 
   let ensureNoDuplicateTests (tests : FlatTest list) = 
-    let duplicateTestNames = 
+    let duplicateTests, otherTests = 
       tests
       |> List.groupBy (fun t -> t.name) 
-      |> List.filter (fun (key, values) -> values |> List.length > 1)
-      |> List.collect snd
+      |> List.partition (fun (key, values) -> values |> List.length > 1)
 
+    let duplicateTestNames = duplicateTests |> List.collect snd
     if not <| List.isEmpty duplicateTestNames
     then
       let errorMessages = duplicateTestNames |> List.map (fun t -> t, TestSummary.single (TestResult.Error (exn <| sprintf "Duplicate test name %s" t.name)) 0.0)
-      Some errorMessages
+      Some (errorMessages, otherTests |> List.collect snd)
     else None
 
   /// Evaluates tests.
@@ -951,9 +951,10 @@ module Impl =
 
       let tests = Test.toTestCodeList test
 
-      match ensureNoDuplicateTests tests with
-      | Some dupes -> return dupes
-      | None ->
+      let dupeErrors, tests = 
+        match ensureNoDuplicateTests tests with
+        | Some (dupes, tests) -> dupes, tests
+        | None -> [], tests
       
       let inline cons xs x = x::xs
 
@@ -962,7 +963,7 @@ module Impl =
          List.forall (fun t -> t.sequenced=Synchronous) tests then
         return!
           List.map evalTestAsync tests
-          |> Async.foldSequentially cons []
+          |> Async.foldSequentially cons dupeErrors
       else
         let sequenced =
           List.filter (fun t -> t.sequenced=Synchronous) tests
@@ -998,10 +999,11 @@ module Impl =
           else
             Async.foldParallelLimit noWorkers (@) [] parallel
 
+        let parallelAndDuped = parallelResults @ dupeErrors
         if List.isEmpty sequenced |> not && List.isEmpty parallel |> not then
           do! config.printer.info "Starting sequenced tests..."
 
-        return! Async.foldSequentially cons parallelResults sequenced
+        return! Async.foldSequentially cons parallelAndDuped sequenced
       }
 
   let evalTestsSilent test =
