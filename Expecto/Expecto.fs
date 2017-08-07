@@ -320,7 +320,7 @@ module Test =
           if String.IsNullOrEmpty parentName
             then name
             else parentName + "/" + name
-        loop fullName testList (computeChildFocusState parentState state) sequenced test
+        loop fullName testList (computeChildFocusState parentState state) sequenced test     
       | TestCase (test, state) ->
         { name=parentName
           test=test
@@ -919,6 +919,19 @@ module Impl =
     else
       config.parallelWorkers
 
+  let ensureNoDuplicateTests (tests : FlatTest list) = 
+    let duplicateTestNames = 
+      tests
+      |> List.groupBy (fun t -> t.name) 
+      |> List.filter (fun (key, values) -> values |> List.length > 1)
+      |> List.collect snd
+
+    if not <| List.isEmpty duplicateTestNames
+    then
+      let errorMessages = duplicateTestNames |> List.map (fun t -> t, TestSummary.single (TestResult.Error (exn <| sprintf "Duplicate test name %s" t.name)) 0.0)
+      Some errorMessages
+    else None
+
   /// Evaluates tests.
   let evalTests config test =
     async {
@@ -937,6 +950,11 @@ module Impl =
         }
 
       let tests = Test.toTestCodeList test
+
+      match ensureNoDuplicateTests tests with
+      | Some dupes -> return dupes
+      | None ->
+      
       let inline cons xs x = x::xs
 
       if not config.``parallel`` ||
